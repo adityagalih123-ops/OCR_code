@@ -1,0 +1,504 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Modul OCR - Pembacaan ID Pcs Bagian</title>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+<style>
+  :root{
+    --bg:#0f1115;
+    --panel:#171a21;
+    --panel2:#1f232c;
+    --accent:#3ddc97;
+    --accent-dim:#2a8f66;
+    --warn:#e0a83d;
+    --danger:#e05a4d;
+    --text:#eef1f5;
+    --text-dim:#9aa3b2;
+    --border:#2b303a;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0; background:var(--bg); color:var(--text);
+    min-height:100vh; padding-bottom:24px;
+  }
+  header{
+    padding:14px 16px 10px; background:var(--panel);
+    border-bottom:1px solid var(--border);
+    position:sticky; top:0; z-index:20;
+  }
+  header h1{margin:0; font-size:16px; font-weight:700;}
+  header p{margin:2px 0 0; font-size:12px; color:var(--text-dim);}
+  .badge{
+    display:inline-block; font-size:10px; font-weight:700; letter-spacing:.03em;
+    background:var(--accent-dim); color:#03150e; padding:2px 7px; border-radius:20px;
+    margin-left:6px; vertical-align:middle;
+  }
+
+  main{max-width:520px; margin:0 auto; padding:14px;}
+
+  .card{
+    background:var(--panel); border:1px solid var(--border);
+    border-radius:14px; padding:14px; margin-bottom:14px;
+  }
+  .card h2{font-size:13px; margin:0 0 10px; color:var(--text-dim); text-transform:uppercase; letter-spacing:.05em;}
+
+  .camera-wrap{
+    position:relative; width:100%; aspect-ratio: 3/4; background:#000;
+    border-radius:12px; overflow:hidden; border:1px solid var(--border);
+  }
+  video{width:100%; height:100%; object-fit:cover; display:block;}
+  .guide-box{
+    position:absolute; left:8%; top:38%; width:84%; height:24%;
+    border:2px dashed var(--accent); border-radius:8px;
+    box-shadow: 0 0 0 999px rgba(0,0,0,0.45);
+    pointer-events:none;
+  }
+  .guide-label{
+    position:absolute; left:8%; top:calc(38% - 22px); font-size:11px; color:var(--accent);
+    font-weight:600; text-shadow:0 1px 3px #000;
+  }
+  .cam-hint{
+    position:absolute; bottom:8px; left:0; right:0; text-align:center;
+    font-size:11px; color:#fff; text-shadow:0 1px 3px #000; padding:0 10px;
+  }
+  .cam-off{
+    display:flex; align-items:center; justify-content:center; height:100%;
+    color:var(--text-dim); font-size:13px; text-align:center; padding:20px;
+  }
+
+  .btn-row{display:flex; gap:8px; margin-top:10px; flex-wrap:wrap;}
+  button{
+    border:none; border-radius:10px; padding:11px 14px; font-size:13.5px; font-weight:600;
+    cursor:pointer; transition:opacity .15s; flex:1; min-width:120px;
+  }
+  button:active{opacity:.75;}
+  button:disabled{opacity:.35; cursor:not-allowed;}
+  .btn-primary{background:var(--accent); color:#04170f;}
+  .btn-secondary{background:var(--panel2); color:var(--text); border:1px solid var(--border);}
+  .btn-danger{background:var(--danger); color:#fff;}
+  .btn-full{flex:1 1 100%;}
+
+  .toggle-row{
+    display:flex; align-items:center; justify-content:space-between;
+    font-size:13px; padding:8px 0; border-top:1px solid var(--border);
+  }
+  .toggle-row:first-child{border-top:none;}
+  .toggle-row .sub{font-size:11px; color:var(--text-dim); margin-top:2px;}
+  select, input[type=text]{
+    background:var(--panel2); color:var(--text); border:1px solid var(--border);
+    border-radius:8px; padding:8px 10px; font-size:13.5px; width:100%;
+  }
+  label.switch{
+    position:relative; display:inline-block; width:40px; height:22px; flex-shrink:0;
+  }
+  label.switch input{opacity:0; width:0; height:0;}
+  .slider{
+    position:absolute; cursor:pointer; inset:0; background:#3a4150; transition:.15s; border-radius:22px;
+  }
+  .slider:before{
+    position:absolute; content:""; height:16px; width:16px; left:3px; bottom:3px;
+    background:#fff; transition:.15s; border-radius:50%;
+  }
+  input:checked + .slider{background:var(--accent-dim);}
+  input:checked + .slider:before{transform:translateX(18px);}
+
+  .result-box{
+    background:var(--panel2); border:1px solid var(--border); border-radius:10px;
+    padding:12px; text-align:center; margin-bottom:10px;
+  }
+  .result-raw{font-size:11px; color:var(--text-dim); margin-bottom:6px;}
+  .result-value{
+    font-size:26px; font-weight:800; letter-spacing:.04em; font-family:'Courier New', monospace;
+    word-break:break-all;
+  }
+  .conf-row{margin-top:8px; font-size:11px; color:var(--text-dim);}
+  .conf-bar{height:5px; border-radius:3px; background:#2b303a; margin-top:4px; overflow:hidden;}
+  .conf-fill{height:100%; background:var(--accent);}
+  .conf-fill.mid{background:var(--warn);}
+  .conf-fill.low{background:var(--danger);}
+
+  .edit-row{display:flex; gap:8px; align-items:center; margin-bottom:10px;}
+  .edit-row input{flex:1; text-align:center; font-family:'Courier New', monospace; font-size:16px; letter-spacing:.05em; text-transform:uppercase;}
+
+  .thumb-row{display:flex; gap:10px; align-items:center; margin-bottom:10px;}
+  .thumb-row img{width:70px; height:auto; border-radius:6px; border:1px solid var(--border);}
+  .thumb-row .thumb-note{font-size:11px; color:var(--text-dim);}
+
+  .status-line{
+    font-size:12px; color:var(--text-dim); text-align:center; padding:6px 0; min-height:18px;
+  }
+  .status-line.err{color:var(--danger);}
+  .status-line.ok{color:var(--accent);}
+
+  table{width:100%; border-collapse:collapse; font-size:12.5px;}
+  th, td{padding:7px 6px; text-align:left; border-bottom:1px solid var(--border);}
+  th{color:var(--text-dim); font-weight:600; font-size:11px; text-transform:uppercase;}
+  td.mono{font-family:'Courier New', monospace; font-weight:700; letter-spacing:.03em;}
+  .empty-hist{text-align:center; color:var(--text-dim); font-size:12.5px; padding:14px 0;}
+  .conf-tag{font-size:10.5px; padding:1px 6px; border-radius:10px; font-weight:700;}
+  .conf-tag.high{background:rgba(61,220,151,.15); color:var(--accent);}
+  .conf-tag.mid{background:rgba(224,168,61,.15); color:var(--warn);}
+  .conf-tag.low{background:rgba(224,90,77,.15); color:var(--danger);}
+
+  .note{
+    font-size:11.5px; color:var(--text-dim); background:var(--panel2); border:1px solid var(--border);
+    border-radius:10px; padding:10px 12px; line-height:1.5;
+  }
+  .note b{color:var(--text);}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Modul OCR - Pembacaan ID Pcs Bagian <span class="badge">TAHAP 1</span></h1>
+  <p>Scan ID cetak (huruf+angka) pada tiap pcs bagian menggunakan kamera</p>
+</header>
+
+<main>
+
+  <div class="card">
+    <h2>Kamera</h2>
+    <div class="camera-wrap" id="camWrap">
+      <div class="cam-off" id="camOff">Tekan "Aktifkan Kamera" untuk mulai scan</div>
+    </div>
+    <div class="btn-row">
+      <button class="btn-primary btn-full" id="btnStartCam">Aktifkan Kamera</button>
+    </div>
+    <div class="btn-row" id="camControls" style="display:none;">
+      <button class="btn-secondary" id="btnSwitchCam">Ganti Kamera</button>
+      <button class="btn-secondary" id="btnTorch" style="display:none;">Senter</button>
+      <button class="btn-primary" id="btnCapture">📸 Ambil & Baca</button>
+    </div>
+    <div class="status-line" id="camStatus"></div>
+  </div>
+
+  <div class="card" id="resultCard" style="display:none;">
+    <h2>Hasil Pembacaan</h2>
+    <div class="thumb-row">
+      <img id="thumbImg" src="" alt="crop">
+      <div class="thumb-note">Area yang diproses OCR (hasil crop dari kotak panduan)</div>
+    </div>
+    <div class="result-box">
+      <div class="result-raw" id="rawText">-</div>
+      <div class="result-value" id="ocrValue">-</div>
+      <div class="conf-row">
+        Tingkat keyakinan OCR: <span id="confPct">-</span>%
+        <div class="conf-bar"><div class="conf-fill" id="confFill" style="width:0%"></div></div>
+      </div>
+    </div>
+    <div class="edit-row">
+      <input type="text" id="editValue" placeholder="Koreksi manual jika perlu">
+    </div>
+    <div class="btn-row">
+      <button class="btn-secondary" id="btnRescan">Scan Ulang</button>
+      <button class="btn-primary" id="btnConfirm">✓ Konfirmasi ID Ini</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Pengaturan Pembacaan</h2>
+    <div class="toggle-row">
+      <div>Mode karakter<div class="sub">Batasi kemungkinan karakter agar OCR lebih akurat</div></div>
+      <select id="charMode" style="width:150px;">
+        <option value="alnum" selected>Huruf + Angka</option>
+        <option value="alpha">Huruf saja</option>
+        <option value="num">Angka saja</option>
+      </select>
+    </div>
+    <div class="toggle-row">
+      <div>Pra-proses B/W<div class="sub">Ubah ke hitam-putih kontras tinggi sebelum OCR</div></div>
+      <label class="switch"><input type="checkbox" id="preprocessToggle" checked><span class="slider"></span></label>
+    </div>
+    <div class="toggle-row">
+      <div>Mode teks<div class="sub">Sesuaikan jika ID lebih dari satu baris</div></div>
+      <select id="psmMode" style="width:150px;">
+        <option value="7" selected>Satu baris</option>
+        <option value="8">Satu kata/blok</option>
+        <option value="6">Beberapa baris</option>
+      </select>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Riwayat Scan (sesi ini saja)</h2>
+    <div id="histWrap">
+      <div class="empty-hist">Belum ada ID yang dikonfirmasi</div>
+    </div>
+  </div>
+
+  <div class="note">
+    <b>Catatan tahap 1:</b> modul ini hanya membaca &amp; menampilkan ID — belum menyimpan ke database. Riwayat di atas hilang saat halaman ditutup/refresh. Kalau logika pembacaan &amp; alur konfirmasi ini sudah pas dipakai di lapangan, langkah berikutnya adalah menyambungkan tombol "Konfirmasi" ke Firestore (log per scan, lalu pencocokan terhadap daftar ID yang seharusnya ada per produk).
+  </div>
+
+</main>
+
+<canvas id="hiddenCanvas" style="display:none;"></canvas>
+
+<script>
+(function(){
+  let stream = null;
+  let currentFacing = 'environment';
+  let videoTrack = null;
+  let torchOn = false;
+  let history = [];
+
+  const camWrap = document.getElementById('camWrap');
+  const camOff = document.getElementById('camOff');
+  const btnStartCam = document.getElementById('btnStartCam');
+  const camControls = document.getElementById('camControls');
+  const btnSwitchCam = document.getElementById('btnSwitchCam');
+  const btnTorch = document.getElementById('btnTorch');
+  const btnCapture = document.getElementById('btnCapture');
+  const camStatus = document.getElementById('camStatus');
+  const resultCard = document.getElementById('resultCard');
+  const thumbImg = document.getElementById('thumbImg');
+  const rawText = document.getElementById('rawText');
+  const ocrValue = document.getElementById('ocrValue');
+  const confPct = document.getElementById('confPct');
+  const confFill = document.getElementById('confFill');
+  const editValue = document.getElementById('editValue');
+  const btnRescan = document.getElementById('btnRescan');
+  const btnConfirm = document.getElementById('btnConfirm');
+  const charMode = document.getElementById('charMode');
+  const preprocessToggle = document.getElementById('preprocessToggle');
+  const psmMode = document.getElementById('psmMode');
+  const histWrap = document.getElementById('histWrap');
+  const hiddenCanvas = document.getElementById('hiddenCanvas');
+
+  function setStatus(msg, type){
+    camStatus.textContent = msg || '';
+    camStatus.className = 'status-line' + (type ? ' ' + type : '');
+  }
+
+  function whitelistFor(mode){
+    if(mode === 'alpha') return 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+    if(mode === 'num') return '0123456789';
+    return 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+  }
+
+  async function startCamera(){
+    setStatus('Membuka kamera...');
+    try{
+      if(stream){
+        stream.getTracks().forEach(t=>t.stop());
+      }
+      const constraints = {
+        video:{ facingMode: { ideal: currentFacing }, width:{ideal:1280}, height:{ideal:1280} },
+        audio:false
+      };
+      stream = await navigator.mediaDevices.getUserMedia(constraints);
+      videoTrack = stream.getVideoTracks()[0];
+
+      camWrap.innerHTML = '';
+      const video = document.createElement('video');
+      video.id = 'liveVideo';
+      video.autoplay = true; video.playsInline = true; video.muted = true;
+      camWrap.appendChild(video);
+
+      const guide = document.createElement('div');
+      guide.className = 'guide-box'; guide.id = 'guideBox';
+      camWrap.appendChild(guide);
+
+      const guideLabel = document.createElement('div');
+      guideLabel.className = 'guide-label';
+      guideLabel.textContent = 'Posisikan ID di dalam kotak';
+      camWrap.appendChild(guideLabel);
+
+      const hint = document.createElement('div');
+      hint.className = 'cam-hint';
+      hint.textContent = 'Pastikan pencahayaan cukup & ID tidak buram';
+      camWrap.appendChild(hint);
+
+      video.srcObject = stream;
+
+      camControls.style.display = 'flex';
+      btnStartCam.style.display = 'none';
+      setStatus('');
+
+      const caps = videoTrack.getCapabilities ? videoTrack.getCapabilities() : {};
+      if(caps.torch){
+        btnTorch.style.display = 'inline-block';
+      } else {
+        btnTorch.style.display = 'none';
+      }
+
+    }catch(err){
+      console.error(err);
+      setStatus('Gagal mengakses kamera: ' + err.message, 'err');
+    }
+  }
+
+  btnStartCam.addEventListener('click', startCamera);
+
+  btnSwitchCam.addEventListener('click', ()=>{
+    currentFacing = (currentFacing === 'environment') ? 'user' : 'environment';
+    startCamera();
+  });
+
+  btnTorch.addEventListener('click', async ()=>{
+    if(!videoTrack) return;
+    try{
+      torchOn = !torchOn;
+      await videoTrack.applyConstraints({ advanced:[{ torch: torchOn }] });
+      btnTorch.textContent = torchOn ? 'Matikan Senter' : 'Senter';
+    }catch(err){
+      setStatus('Senter tidak didukung di perangkat ini', 'err');
+    }
+  });
+
+  function mapGuideToVideoCoords(video, guideEl){
+    const videoRect = video.getBoundingClientRect();
+    const guideRect = guideEl.getBoundingClientRect();
+
+    const vw = video.videoWidth;
+    const vh = video.videoHeight;
+    const dw = videoRect.width;
+    const dh = videoRect.height;
+
+    // object-fit: cover scaling math
+    const scale = Math.max(dw / vw, dh / vh);
+    const scaledW = vw * scale;
+    const scaledH = vh * scale;
+    const offsetX = (scaledW - dw) / 2;
+    const offsetY = (scaledH - dh) / 2;
+
+    const guideLeftInVideo = (guideRect.left - videoRect.left);
+    const guideTopInVideo = (guideRect.top - videoRect.top);
+
+    const srcX = (guideLeftInVideo + offsetX) / scale;
+    const srcY = (guideTopInVideo + offsetY) / scale;
+    const srcW = guideRect.width / scale;
+    const srcH = guideRect.height / scale;
+
+    return {
+      x: Math.max(0, srcX), y: Math.max(0, srcY),
+      w: Math.min(srcW, vw), h: Math.min(srcH, vh)
+    };
+  }
+
+  function preprocessCanvas(canvas){
+    const ctx = canvas.getContext('2d');
+    const imgData = ctx.getImageData(0,0,canvas.width, canvas.height);
+    const d = imgData.data;
+    let sum = 0;
+    const gray = new Uint8ClampedArray(canvas.width*canvas.height);
+    for(let i=0, p=0; i<d.length; i+=4, p++){
+      const g = 0.299*d[i] + 0.587*d[i+1] + 0.114*d[i+2];
+      gray[p] = g;
+      sum += g;
+    }
+    const mean = sum / gray.length;
+    const threshold = mean - 10;
+    for(let i=0, p=0; i<d.length; i+=4, p++){
+      const v = gray[p] > threshold ? 255 : 0;
+      d[i] = v; d[i+1] = v; d[i+2] = v;
+    }
+    ctx.putImageData(imgData, 0, 0);
+  }
+
+  async function captureAndRead(){
+    const video = document.getElementById('liveVideo');
+    const guideEl = document.getElementById('guideBox');
+    if(!video || !video.videoWidth){
+      setStatus('Kamera belum siap, coba lagi', 'err');
+      return;
+    }
+
+    const crop = mapGuideToVideoCoords(video, guideEl);
+
+    hiddenCanvas.width = crop.w;
+    hiddenCanvas.height = crop.h;
+    const ctx = hiddenCanvas.getContext('2d');
+    ctx.drawImage(video, crop.x, crop.y, crop.w, crop.h, 0, 0, crop.w, crop.h);
+
+    if(preprocessToggle.checked){
+      preprocessCanvas(hiddenCanvas);
+    }
+
+    const dataUrl = hiddenCanvas.toDataURL('image/png');
+    thumbImg.src = dataUrl;
+    resultCard.style.display = 'block';
+    resultCard.scrollIntoView({behavior:'smooth', block:'nearest'});
+
+    ocrValue.textContent = '...';
+    rawText.textContent = 'Membaca...';
+    confPct.textContent = '-';
+    confFill.style.width = '0%';
+    confFill.className = 'conf-fill';
+    editValue.value = '';
+    btnCapture.disabled = true;
+    setStatus('Memproses OCR...');
+
+    try{
+      const result = await Tesseract.recognize(dataUrl, 'eng', {
+        tessedit_char_whitelist: whitelistFor(charMode.value),
+        tessedit_pageseg_mode: psmMode.value
+      });
+
+      const text = (result.data.text || '').trim();
+      const cleaned = text.replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+      const conf = Math.round(result.data.confidence || 0);
+
+      rawText.textContent = text ? ('Teks mentah: "' + text + '"') : 'Tidak ada teks terbaca';
+      ocrValue.textContent = cleaned || '(kosong)';
+      editValue.value = cleaned;
+      confPct.textContent = conf;
+      confFill.style.width = conf + '%';
+      confFill.className = 'conf-fill' + (conf >= 75 ? '' : conf >= 45 ? ' mid' : ' low');
+
+      setStatus('Selesai. Cek/koreksi hasil sebelum konfirmasi.', 'ok');
+    }catch(err){
+      console.error(err);
+      setStatus('OCR gagal: ' + err.message, 'err');
+      ocrValue.textContent = '(gagal)';
+    }finally{
+      btnCapture.disabled = false;
+    }
+  }
+
+  btnCapture.addEventListener('click', captureAndRead);
+
+  btnRescan.addEventListener('click', ()=>{
+    resultCard.style.display = 'none';
+    setStatus('');
+  });
+
+  btnConfirm.addEventListener('click', ()=>{
+    const val = editValue.value.trim().toUpperCase();
+    if(!val){
+      setStatus('ID tidak boleh kosong', 'err');
+      return;
+    }
+    const conf = parseInt(confPct.textContent) || 0;
+    history.unshift({ id: val, conf, time: new Date(), thumb: thumbImg.src });
+    renderHistory();
+    resultCard.style.display = 'none';
+    setStatus('ID "' + val + '" dikonfirmasi', 'ok');
+  });
+
+  function confTagClass(conf){
+    if(conf >= 75) return 'high';
+    if(conf >= 45) return 'mid';
+    return 'low';
+  }
+
+  function renderHistory(){
+    if(history.length === 0){
+      histWrap.innerHTML = '<div class="empty-hist">Belum ada ID yang dikonfirmasi</div>';
+      return;
+    }
+    let rows = history.map(h=>{
+      const t = h.time.toLocaleTimeString('id-ID', {hour:'2-digit', minute:'2-digit', second:'2-digit'});
+      return '<tr><td class="mono">'+h.id+'</td><td><span class="conf-tag '+confTagClass(h.conf)+'">'+h.conf+'%</span></td><td>'+t+'</td></tr>';
+    }).join('');
+    histWrap.innerHTML = '<table><thead><tr><th>ID Pcs</th><th>Keyakinan</th><th>Waktu</th></tr></thead><tbody>'+rows+'</tbody></table>';
+  }
+
+})();
+</script>
+
+</body>
+</html>
