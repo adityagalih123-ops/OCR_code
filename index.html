@@ -51,13 +51,13 @@
   }
   video{width:100%; height:100%; object-fit:cover; display:block;}
   .guide-box{
-    position:absolute; left:8%; top:38%; width:84%; height:24%;
+    position:absolute; left:10%; top:42%; width:80%; height:13%;
     border:2px dashed var(--accent); border-radius:8px;
     box-shadow: 0 0 0 999px rgba(0,0,0,0.45);
     pointer-events:none;
   }
   .guide-label{
-    position:absolute; left:8%; top:calc(38% - 22px); font-size:11px; color:var(--accent);
+    position:absolute; left:10%; top:calc(42% - 22px); font-size:11px; color:var(--accent);
     font-weight:600; text-shadow:0 1px 3px #000;
   }
   .cam-hint{
@@ -203,13 +203,14 @@
     <div class="toggle-row">
       <div>Mode karakter<div class="sub">Batasi kemungkinan karakter agar OCR lebih akurat</div></div>
       <select id="charMode" style="width:150px;">
-        <option value="alnum" selected>Huruf + Angka</option>
+        <option value="num" selected>Angka saja</option>
+        <option value="alnum">Huruf + Angka</option>
         <option value="alpha">Huruf saja</option>
-        <option value="num">Angka saja</option>
+        <option value="alnum_full">Teks lengkap (+ spasi/strip)</option>
       </select>
     </div>
     <div class="toggle-row">
-      <div>Pra-proses B/W<div class="sub">Ubah ke hitam-putih kontras tinggi sebelum OCR</div></div>
+      <div>Pra-proses B/W<div class="sub">Coba otomatis 2 mode kontras (gelap/terang) & pakai yang keyakinannya lebih tinggi</div></div>
       <label class="switch"><input type="checkbox" id="preprocessToggle" checked><span class="slider"></span></label>
     </div>
     <div class="toggle-row">
@@ -276,6 +277,7 @@
   function whitelistFor(mode){
     if(mode === 'alpha') return 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
     if(mode === 'num') return '0123456789';
+    if(mode === 'alnum_full') return 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 -';
     return 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
   }
 
@@ -286,11 +288,18 @@
         stream.getTracks().forEach(t=>t.stop());
       }
       const constraints = {
-        video:{ facingMode: { ideal: currentFacing }, width:{ideal:1280}, height:{ideal:1280} },
+        video:{ facingMode: { ideal: currentFacing }, width:{ideal:1920}, height:{ideal:1920} },
         audio:false
       };
       stream = await navigator.mediaDevices.getUserMedia(constraints);
       videoTrack = stream.getVideoTracks()[0];
+
+      try{
+        const caps0 = videoTrack.getCapabilities ? videoTrack.getCapabilities() : {};
+        if(caps0.focusMode && caps0.focusMode.includes('continuous')){
+          await videoTrack.applyConstraints({ advanced:[{ focusMode:'continuous' }] });
+        }
+      }catch(e){ /* focusMode control not supported on this device, ignore */ }
 
       camWrap.innerHTML = '';
       const video = document.createElement('video');
@@ -304,15 +313,24 @@
 
       const guideLabel = document.createElement('div');
       guideLabel.className = 'guide-label';
-      guideLabel.textContent = 'Posisikan ID di dalam kotak';
+      guideLabel.textContent = 'Posisikan 1 baris nomor ID saja di sini';
       camWrap.appendChild(guideLabel);
 
       const hint = document.createElement('div');
       hint.className = 'cam-hint';
-      hint.textContent = 'Pastikan pencahayaan cukup & ID tidak buram';
+      hint.textContent = 'Jangan sampai 2 baris masuk kotak sekaligus \u2014 ketuk layar utk fokus ulang';
       camWrap.appendChild(hint);
 
       video.srcObject = stream;
+
+      video.addEventListener('click', async ()=>{
+        if(!videoTrack || !videoTrack.applyConstraints) return;
+        try{
+          await videoTrack.applyConstraints({ advanced:[{ focusMode:'continuous' }] });
+          setStatus('Fokus ulang...', 'ok');
+          setTimeout(()=>setStatus(''), 800);
+        }catch(e){ /* not supported, ignore silently */ }
+      });
 
       camControls.style.display = 'flex';
       btnStartCam.style.display = 'none';
@@ -379,24 +397,73 @@
     };
   }
 
-  function preprocessCanvas(canvas){
+  function makeCanvas(w, h){
+    const c = document.createElement('canvas');
+    c.width = w; c.height = h;
+    return c;
+  }
+
+  // Upscale small crops so characters have enough pixel height for OCR.
+  function upscaleCanvas(srcCanvas, minTargetHeight){
+    if(srcCanvas.height >= minTargetHeight) return srcCanvas;
+    const factor = minTargetHeight / srcCanvas.height;
+    const out = makeCanvas(Math.round(srcCanvas.width*factor), Math.round(srcCanvas.height*factor));
+    const ctx = out.getContext('2d');
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(srcCanvas, 0, 0, out.width, out.height);
+    return out;
+  }
+
+  function getGrayArray(canvas){
     const ctx = canvas.getContext('2d');
     const imgData = ctx.getImageData(0,0,canvas.width, canvas.height);
     const d = imgData.data;
-    let sum = 0;
     const gray = new Uint8ClampedArray(canvas.width*canvas.height);
     for(let i=0, p=0; i<d.length; i+=4, p++){
-      const g = 0.299*d[i] + 0.587*d[i+1] + 0.114*d[i+2];
-      gray[p] = g;
-      sum += g;
+      gray[p] = 0.299*d[i] + 0.587*d[i+1] + 0.114*d[i+2];
     }
-    const mean = sum / gray.length;
-    const threshold = mean - 10;
-    for(let i=0, p=0; i<d.length; i+=4, p++){
-      const v = gray[p] > threshold ? 255 : 0;
-      d[i] = v; d[i+1] = v; d[i+2] = v;
+    return { gray, imgData };
+  }
+
+  // Otsu's method: finds the threshold that best separates ink from background,
+  // works better across varying lighting than a fixed offset.
+  function otsuThreshold(gray){
+    const hist = new Array(256).fill(0);
+    for(let i=0;i<gray.length;i++) hist[gray[i]]++;
+    const total = gray.length;
+    let sum = 0;
+    for(let t=0;t<256;t++) sum += t*hist[t];
+    let sumB=0, wB=0, wF=0, maxVar=0, threshold=127;
+    for(let t=0;t<256;t++){
+      wB += hist[t];
+      if(wB === 0) continue;
+      wF = total - wB;
+      if(wF === 0) break;
+      sumB += t*hist[t];
+      const mB = sumB/wB;
+      const mF = (sum-sumB)/wF;
+      const varBetween = wB*wF*(mB-mF)*(mB-mF);
+      if(varBetween > maxVar){ maxVar = varBetween; threshold = t; }
+    }
+    return threshold;
+  }
+
+  // Builds a binarized canvas. invert=false assumes dark text on a light background
+  // (most printed labels); invert=true assumes light/white text on a dark background
+  // (common on embroidered or dark fabric labels).
+  function binarizeCanvas(srcCanvas, gray, threshold, invert){
+    const out = makeCanvas(srcCanvas.width, srcCanvas.height);
+    const ctx = out.getContext('2d');
+    const imgData = ctx.createImageData(srcCanvas.width, srcCanvas.height);
+    const d = imgData.data;
+    for(let i=0, p=0; p<gray.length; i+=4, p++){
+      const isInk = invert ? gray[p] >= threshold : gray[p] < threshold;
+      const v = isInk ? 0 : 255;
+      d[i]=v; d[i+1]=v; d[i+2]=v; d[i+3]=255;
     }
     ctx.putImageData(imgData, 0, 0);
+    return out;
   }
 
   async function captureAndRead(){
@@ -414,15 +481,11 @@
     const ctx = hiddenCanvas.getContext('2d');
     ctx.drawImage(video, crop.x, crop.y, crop.w, crop.h, 0, 0, crop.w, crop.h);
 
-    if(preprocessToggle.checked){
-      preprocessCanvas(hiddenCanvas);
-    }
+    // Ensure characters have enough pixel height for Tesseract to work with.
+    const working = upscaleCanvas(hiddenCanvas, 220);
 
-    const dataUrl = hiddenCanvas.toDataURL('image/png');
-    thumbImg.src = dataUrl;
     resultCard.style.display = 'block';
     resultCard.scrollIntoView({behavior:'smooth', block:'nearest'});
-
     ocrValue.textContent = '...';
     rawText.textContent = 'Membaca...';
     confPct.textContent = '-';
@@ -430,26 +493,59 @@
     confFill.className = 'conf-fill';
     editValue.value = '';
     btnCapture.disabled = true;
-    setStatus('Memproses OCR...');
+
+    const ocrConfig = {
+      tessedit_char_whitelist: whitelistFor(charMode.value),
+      tessedit_pageseg_mode: psmMode.value,
+      tessedit_ocr_engine_mode: '1' // LSTM-only: generally more accurate on real-world camera text
+    };
 
     try{
-      const result = await Tesseract.recognize(dataUrl, 'eng', {
-        tessedit_char_whitelist: whitelistFor(charMode.value),
-        tessedit_pageseg_mode: psmMode.value
-      });
+      let candidates = [];
 
-      const text = (result.data.text || '').trim();
+      if(preprocessToggle.checked){
+        setStatus('Memproses OCR (mencoba 2 mode kontras)...');
+        const { gray } = getGrayArray(working);
+        const t = otsuThreshold(gray);
+        const canvasNormal = binarizeCanvas(working, gray, t, false);   // teks gelap di latar terang
+        const canvasInverted = binarizeCanvas(working, gray, t, true);  // teks terang di latar gelap
+
+        const [rNormal, rInverted] = await Promise.all([
+          Tesseract.recognize(canvasNormal.toDataURL('image/png'), 'eng', ocrConfig),
+          Tesseract.recognize(canvasInverted.toDataURL('image/png'), 'eng', ocrConfig)
+        ]);
+
+        candidates = [
+          { result: rNormal, canvas: canvasNormal, label: 'teks gelap/latar terang' },
+          { result: rInverted, canvas: canvasInverted, label: 'teks terang/latar gelap' }
+        ];
+      } else {
+        setStatus('Memproses OCR...');
+        const r = await Tesseract.recognize(working.toDataURL('image/png'), 'eng', ocrConfig);
+        candidates = [{ result: r, canvas: working, label: 'tanpa pra-proses' }];
+      }
+
+      candidates.sort((a,b)=> (b.result.data.confidence||0) - (a.result.data.confidence||0));
+      const best = candidates[0];
+
+      thumbImg.src = best.canvas.toDataURL('image/png');
+
+      const text = (best.result.data.text || '').trim();
       const cleaned = text.replace(/[^A-Za-z0-9]/g, '').toUpperCase();
-      const conf = Math.round(result.data.confidence || 0);
+      const conf = Math.round(best.result.data.confidence || 0);
 
-      rawText.textContent = text ? ('Teks mentah: "' + text + '"') : 'Tidak ada teks terbaca';
+      rawText.textContent = (text ? ('Teks mentah: "' + text + '"') : 'Tidak ada teks terbaca') + ' — mode: ' + best.label;
       ocrValue.textContent = cleaned || '(kosong)';
       editValue.value = cleaned;
       confPct.textContent = conf;
       confFill.style.width = conf + '%';
       confFill.className = 'conf-fill' + (conf >= 75 ? '' : conf >= 45 ? ' mid' : ' low');
 
-      setStatus('Selesai. Cek/koreksi hasil sebelum konfirmasi.', 'ok');
+      if(conf < 45){
+        setStatus('Keyakinan rendah — dekatkan kamera, pastikan cahaya rata, lalu coba lagi', 'err');
+      } else {
+        setStatus('Selesai. Cek/koreksi hasil sebelum konfirmasi.', 'ok');
+      }
     }catch(err){
       console.error(err);
       setStatus('OCR gagal: ' + err.message, 'err');
